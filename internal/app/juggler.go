@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/reflect11n/juggler/internal/domain/entity"
 )
@@ -17,6 +18,7 @@ type Jungler struct {
 	LeftHand     chan entity.Ball
 	RightHand    chan entity.Ball
 	StopJuggling <-chan struct{}
+	balls        sync.Map
 	End          atomic.Bool
 	WG           *sync.WaitGroup
 	nBalls       int
@@ -27,6 +29,7 @@ func NewJungler(ctx context.Context, nBalls int) *Jungler {
 		ctx:          ctx,
 		LeftHand:     make(chan entity.Ball),
 		RightHand:    make(chan entity.Ball),
+		balls:        sync.Map{},
 		WG:           &sync.WaitGroup{},
 		StopJuggling: ctx.Done(),
 		nBalls:       nBalls,
@@ -43,33 +46,56 @@ func (j *Jungler) NewBall() entity.Ball {
 
 func (j *Jungler) StartJungling() {
 	for i := 0; i < j.nBalls; i++ {
+		select {
+		case <-j.StopJuggling:
+			return
+		default:
+		}
+
 		ball := j.NewBall()
 		j.LeftHand <- ball
+
+		time.Sleep(time.Second)
 	}
 }
 
-// кол-во в полете, в руках, id мячей и их состояние
 func (j *Jungler) monitorStatus() {
-	fmt.Printf("Статус: В воздухе %d, В руках %d\n\n", j.InFlight.Load(), int64(j.nBalls)-j.InFlight.Load())
+	inFlight := j.InFlight.Load()
+	inHands := int64(j.nBalls) - inFlight
+
+	fmt.Printf("Статус: В воздухе %d, В руках %d\n", inFlight, inHands)
+
+	for id := int64(1); id <= int64(j.nBalls); id++ {
+		if _, ok := j.balls.Load(id); ok {
+			fmt.Printf("  Ball#%d: в полёте\n", id)
+		} else {
+			fmt.Printf("  Ball#%d: в руках\n", id)
+		}
+	}
+	fmt.Println()
 }
+
 func (j *Jungler) Init() {
-	go j.LeftHandListener()
-	go j.RightHandListener()
-	go j.monitorStatus()
+	go j.LeftHandProcessor()
+	go j.RightHandProcessor()
 }
-func (j *Jungler) LeftHandListener() {
+
+func (j *Jungler) LeftHandProcessor() {
+	defer close(j.RightHand)
 	for ball := range j.LeftHand {
 		j.monitorStatus()
-
 		j.InFlight.Add(1)
+		j.balls.Store(ball.ID, ball)
 		j.WG.Add(1)
 		go ball.Fly(j.RightHand)
 	}
 }
 
-func (j *Jungler) RightHandListener() {
+func (j *Jungler) RightHandProcessor() {
+	defer close(j.LeftHand)
 	for ball := range j.RightHand {
 		j.InFlight.Add(-1)
+		j.balls.Delete(ball.ID)
 		j.WG.Done()
 		if !j.End.Load() {
 			j.LeftHand <- ball
@@ -79,7 +105,8 @@ func (j *Jungler) RightHandListener() {
 
 func (j *Jungler) HandleShutDown() {
 	<-j.StopJuggling
+	fmt.Println("Время вышло. Новых мячей не будет")
 	j.End.Store(true)
-	close(j.LeftHand)
-	close(j.RightHand)
+	j.WG.Wait()
+	fmt.Println("Все мячи упали.")
 }

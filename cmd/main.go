@@ -9,12 +9,12 @@ import (
 )
 
 const (
-	tMin   = 1
+	tMin   = 3
 	nBalls = 3
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*tMin)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*tMin)
 	defer cancel()
 
 	j := app.NewJungler(ctx, nBalls)
@@ -24,7 +24,6 @@ func main() {
 
 	fmt.Println("Начинаем подбрасывать мячи...")
 	go j.StartJungling()
+
 	j.HandleShutDown()
-	j.WG.Wait()
-	fmt.Println("Все мячи упали.")
 }
